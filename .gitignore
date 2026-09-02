@@ -1,0 +1,10 @@
+# 本地实例配置（含路径），不提交；使用 config.example.json 作为模板
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 系统
+.DS_Store

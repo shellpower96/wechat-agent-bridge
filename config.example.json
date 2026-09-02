@@ -1,0 +1,33 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 36060,
+  "onebot_token": "MuseBot",
+  "onebot_send_url": "http://127.0.0.1:58080",
+  "whitelist_file": "~/.wechat-agent/whitelist.json",
+  "groups_file": "~/.wechat-agent/groups.json",
+  "human_timeout_seconds": 600,
+  "group_reply_mode": "mention",
+
+  "provider": "hermes",
+
+  "providers": {
+    "hermes": {
+      "base_url": "http://127.0.0.1:18645",
+      "api_key_file": "~/.hermes/profiles/wechat-cs/.api_server_key",
+      "model": "wechat-cs",
+      "timeout_seconds": 150
+    },
+    "claude": {
+      "claude_bin": "claude",
+      "timeout_seconds": 300,
+      "extra_args": []
+    },
+    "openai_compat": {
+      "base_url": "http://localhost:11434/v1",
+      "model": "qwen2.5:7b",
+      "api_key": "ollama",
+      "timeout_seconds": 120,
+      "system_prompt": "你是微信自动客服助手，用简洁礼貌的中文回答。"
+    }
+  }
+}
