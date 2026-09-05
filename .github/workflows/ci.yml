@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 语法检查
+        run: |
+          python3 -m py_compile bridge.py mcp_server.py providers/__init__.py \
+            providers/hermes.py providers/claude.py providers/openai_compat.py
+
+      - name: Shell 语法检查
+        run: |
+          for f in scripts/*.sh; do bash -n "$f"; done
+
+      - name: 配置文件 JSON 校验
+        run: |
+          python3 -c "import json; json.load(open('config.example.json')); print('config.example.json OK')"
+
+      - name: 核心文件清单断言（防止误删/漏提交）
+        run: |
+          for p in bridge.py mcp_server.py config.example.json LICENSE README.md \
+                   scripts/start.sh scripts/stop.sh scripts/doctor.sh scripts/rebuild_wechat.sh \
+                   scripts/inject_load_dylib.py scripts/FridaGadget.config \
+                   docs/INSTALL.md docs/ARCHITECTURE.md docs/RUNBOOK.md docs/MIGRATION.md; do
+            test -f "$p" || { echo "缺失: $p"; exit 1; }
+          done
+          echo "文件清单 OK"
+
+      - name: 冒烟（import provider 模块）
+        run: |
+          python3 - <<'PY'
+          for mod in ("providers.hermes", "providers.claude", "providers.openai_compat"):
+              __import__(mod)
+          print("providers import OK")
+          PY
