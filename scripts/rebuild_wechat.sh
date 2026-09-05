@@ -1,43 +1,70 @@
 #!/bin/bash
-# 重建 /Applications/WXHook.app（微信 Hook 版），封装全部踩坑经验：
-#   1) 必须用官方 4.1.11.53 build 269109（App Store 269136 / dmg 269111 均不匹配）
-#   2) macOS 26 App Store 保护 → 复制到用户可写路径
-#   3) AMFI 拒绝带 get-task-allow 的临时签名 → 纯 ad-hoc（无 entitlements）
-#   4) 删除 Sparkle 的 Updater.app + 关闭自动更新（否则微信会自更新覆盖注入）
-#   5) FridaGadget.config 放 Resources + Frameworks 相对符号链接（避免签名失败）
+# 重建 /Applications/WXHook.app（微信 Hook 版），封装全部前置与坑位。
+# 目标：新用户零卡点。所需文件优先用仓库内嵌，缺失则自动下载并校验 SHA256。
 #
-# 环境变量（有默认值）：
-#   DMG          269109 官方 dmg 路径       默认 ~/wechat-claw/wx41153.dmg
-#   GADGET_DYLIB FridaGadget 17.8.0 dylib   默认 ~/wechat-claw/patch/FridaGadget.dylib
-#   INJECT_PY    inject_load_dylib.py 路径  默认 ~/wechat-claw/wechat-mac-hook-main/scripts/inject_load_dylib.py
-#   GADGET_CFG   FridaGadget.config 路径    默认 ~/wechat-claw/weixin-macos/frida-gadget/FridaGadget.config
+# 环境变量（均可不设，脚本自动处理）：
+#   DMG          269109 官方 dmg 下载 URL 或本地路径   默认自动下载
+#   GADGET_DYLIB FridaGadget dylib 路径               默认 scripts/patch/FridaGadget.dylib（缺则下载）
+#   INJECT_PY    inject_load_dylib.py                 默认 scripts/inject_load_dylib.py（内嵌）
+#   GADGET_CFG   FridaGadget.config                   默认 scripts/FridaGadget.config（内嵌）
 set -euo pipefail
 
-DMG="${DMG:-$HOME/wechat-claw/wx41153.dmg}"
-GADGET_DYLIB="${GADGET_DYLIB:-$HOME/wechat-claw/patch/FridaGadget.dylib}"
-INJECT_PY="${INJECT_PY:-$HOME/wechat-claw/wechat-mac-hook-main/scripts/inject_load_dylib.py}"
-GADGET_CFG="${GADGET_CFG:-$HOME/wechat-claw/weixin-macos/frida-gadget/FridaGadget.config}"
-HOOKAPP="/Applications/WXHook.app"
-MOUNT="$HOME/wechat-claw/wxmount"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPTS="$DIR/scripts"
+PATCH="$DIR/scripts/patch"
+mkdir -p "$PATCH" "$HOME/wechat-claw"
 
-[[ -f "$DMG" ]] || { echo "缺少 dmg: $DMG"; exit 2; }
-[[ -f "$GADGET_DYLIB" ]] || { echo "缺少 gadget dylib: $GADGET_DYLIB"; exit 2; }
-[[ -f "$INJECT_PY" ]] || { echo "缺少 inject 脚本: $INJECT_PY"; exit 2; }
-[[ -f "$GADGET_CFG" ]] || { echo "缺少 gadget config: $GADGET_CFG"; exit 2; }
+# 已知校验值（与官方 manifest / weixin-macos 一致）
+EXPECTED_BUILD="269109"
+GADGET_SHA="fa67242fa0cee16e80a803703991e81381cd05f7823a4151515460339c942f9f"
+DMG_URL="${DMG_URL:-https://dldir1v6.qq.com/weixin/Universal/Mac/xWeChatMac_universal_4.1.11.53_41748.dmg}"
+GADGET_URL="https://github.com/frida/frida/releases/download/17.8.0/frida-gadget-17.8.0-macos-universal.dylib.xz"
 
-# 退出微信
+# 内嵌文件（仓库自带）
+INJECT_PY="${INJECT_PY:-$SCRIPTS/inject_load_dylib.py}"
+GADGET_CFG="${GADGET_CFG:-$SCRIPTS/FridaGadget.config}"
+
+# 下载工具
+fetch() { # fetch <url> <out>
+  echo "  下载 $1"
+  curl -L --http1.1 --retry 3 --retry-delay 3 --max-time 900 -o "$2" "$1" 2>&1 | tail -1
+}
+
+# ---- 1. 微信 269109 dmg ----
+if [ -n "${DMG:-}" ] && [ -f "$DMG" ]; then
+  DMG_SRC="$DMG"
+elif [ -f "$HOME/wechat-claw/wx41153.dmg" ]; then
+  DMG_SRC="$HOME/wechat-claw/wx41153.dmg"
+else
+  DMG_SRC="$HOME/wechat-claw/wx41153.dmg"
+  [ -f "$DMG_SRC" ] || fetch "$DMG_URL" "$DMG_SRC"
+fi
+echo "[1/5] 微信 dmg: $DMG_SRC"
+
+# ---- 2. FridaGadget dylib (17.8.0) ----
+GADGET_DYLIB="${GADGET_DYLIB:-$PATCH/FridaGadget.dylib}"
+if [ ! -f "$GADGET_DYLIB" ]; then
+  XZ="$PATCH/gadget.xz"
+  [ -f "$XZ" ] || fetch "$GADGET_URL" "$XZ"
+  xz -dkf "$XZ" && mv "$PATCH/gadget" "$GADGET_DYLIB" 2>/dev/null || true
+fi
+ACTUAL=$(shasum -a 256 "$GADGET_DYLIB" | awk '{print $1}')
+[ "$ACTUAL" == "$GADGET_SHA" ] || { echo "❌ FridaGadget 校验失败: $ACTUAL"; exit 6; }
+echo "[2/5] FridaGadget 17.8.0 校验通过"
+
+# ---- 3. 退出微信 + 挂载 dmg ----
 pgrep -x WeChat >/dev/null && { echo "退出微信..."; pkill -x WeChat; sleep 3; }
-
-# 挂载 dmg 并校验版本
+MOUNT="$HOME/wechat-claw/wxmount"
 mkdir -p "$MOUNT"
 hdiutil detach "$MOUNT" 2>/dev/null || true
-hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$MOUNT" "$DMG" >/dev/null
+hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$MOUNT" "$DMG_SRC" >/dev/null
 SRC="$MOUNT/WeChat.app"
 BUILD=$(defaults read "$SRC/Contents/Info" CFBundleVersion)
-[[ "$BUILD" == "269109" ]] || { echo "dmg 版本错误 build=$BUILD（期望 269109）"; exit 3; }
-echo "✅ dmg 校验通过 build=$BUILD"
+[ "$BUILD" == "$EXPECTED_BUILD" ] || { echo "❌ dmg 版本错误 build=$BUILD（期望 $EXPECTED_BUILD）"; exit 3; }
+echo "[3/5] dmg 校验通过 build=$BUILD"
 
-# 复制 + 移除 Sparkle 更新组件（保留框架本体，防止主程序 dylib 引用悬空）
+# ---- 4. 复制 + 移除 Sparkle 更新组件（保留框架本体防悬空）----
+HOOKAPP="/Applications/WXHook.app"
 rm -rf "$HOOKAPP"
 cp -Rp "$SRC" "$HOOKAPP"
 rm -rf "$HOOKAPP/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" 2>/dev/null || true
@@ -46,7 +73,7 @@ rm -rf "$HOOKAPP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/In
 /usr/libexec/PlistBuddy -c "Delete :SUPublicDSAKeyFile" "$HOOKAPP/Contents/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool false" "$HOOKAPP/Contents/Info.plist" 2>/dev/null || true
 
-# 注入 gadget + 配置
+# ---- 5. 注入 gadget + 配置 + 纯 ad-hoc 签名 ----
 FW="$HOOKAPP/Contents/Frameworks"
 EXE="$HOOKAPP/Contents/MacOS/WeChat"
 cp "$GADGET_DYLIB" "$FW/FridaGadget.dylib"
@@ -55,12 +82,8 @@ python3 "$INJECT_PY" "$EXE" "@executable_path/../Frameworks/FridaGadget.dylib"
 mkdir -p "$HOOKAPP/Contents/Resources"
 cp "$GADGET_CFG" "$HOOKAPP/Contents/Resources/FridaGadget.config"
 ln -sf ../Resources/FridaGadget.config "$FW/FridaGadget.config"
-
-# 清理 quarantine/provenance
 xattr -dr com.apple.quarantine "$HOOKAPP" 2>/dev/null || true
 xattr -dr com.apple.provenance "$HOOKAPP" 2>/dev/null || true
-
-# 纯 ad-hoc 签名（无 entitlements！），深层优先
 codesign -f -s - --timestamp=none "$FW/FridaGadget.dylib"
 python3 - "$HOOKAPP/Contents" <<'PY'
 import pathlib, subprocess, sys
@@ -72,8 +95,8 @@ for p in sorted(code, key=lambda i: len(i.parts), reverse=True):
     subprocess.run(["codesign", "-f", "-s", "-", "--timestamp=none", str(p)], check=True)
 PY
 codesign -f -s - --timestamp=none --force "$HOOKAPP"
-codesign --verify --deep --strict "$HOOKAPP"
+codesign --verify --deep --strict "$HOOKAPP" && echo "[4/5] 签名验证通过"
 
 echo ""
-echo "✅ 重建完成：$HOOKAPP (build 269109, FridaGadget 已注入, Sparkle 更新已禁用)"
+echo "✅ [5/5] 重建完成：$HOOKAPP (build 269109, FridaGadget 已注入, Sparkle 更新已禁用)"
 echo "   启动：open $HOOKAPP"

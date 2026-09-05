@@ -29,29 +29,38 @@ wechat-agent-bridge/
 │   ├── claude.py           #   Claude Code headless CLI（--session-id/--resume）
 │   └── openai_compat.py    #   通用 OpenAI 兼容端点（chat/completions）
 ├── config.example.json     # 配置文件样例
-├── scripts/                # doctor / start / stop / rebuild_wechat
-├── docs/                   # ARCHITECTURE / RUNBOOK / MIGRATION
+├── scripts/                # doctor / start / stop / rebuild_wechat + 内嵌注入脚本
+│   ├── inject_load_dylib.py    #  Mach-O 注入（仓库内嵌，无外部依赖）
+│   └── FridaGadget.config      #  gadget 配置（仓库内嵌）
+├── docs/                   # INSTALL（零卡点） / ARCHITECTURE / RUNBOOK / MIGRATION
 └── skills/                 # 供 Hermes / Claude 直接引用的 skill 说明
 ```
 
 ## 快速开始
 
+> **完整零卡点安装 → [`docs/INSTALL.md`](docs/INSTALL.md)**（前置环境矩阵 / 分步命令 / 卡点清单）。
+
 ```bash
-# 0. 一次性准备：微信 Hook 版（仅需一次，见 scripts/rebuild_wechat.sh）
-bash scripts/rebuild_wechat.sh        # 产出 /Applications/WXHook.app（269109 + FridaGadget，无自更新）
+# 0. 一键准备：微信 Hook 版（自动下载 dmg + gadget + 签名，内嵌注入脚本）
+bash scripts/rebuild_wechat.sh
 
-# 1. 配置
-cp config.example.json config.json     # 选 provider、填白名单 wxid、超时
+# 1. 配置（provider / 白名单 / 超时，见 config.example.json）
+cp config.example.json config.json
 
-# 2. 启动
-bash scripts/start.sh                  # 依次拉起 WeChat → onebot → bridge
+# 2. 一键启动（微信 → onebot → bridge）
+bash scripts/start.sh
 
 # 3. 体检
-bash scripts/doctor.sh                 # 检查 27042 / 58080 / 36060 / provider 连通性
+bash scripts/doctor.sh
 
 # 4. 运行状态
-curl http://127.0.0.1:36060/health     # {"mode":"ai","human_timeout_seconds":600,...}
+curl http://127.0.0.1:36060/health     # {"mode":"ai","provider":"hermes",...}
 ```
+
+## 前置环境（一句话版）
+
+macOS 26 · 微信客户端 269109 · Xcode CLT · Go（编译 onebot）· Python 3.11（bridge）。
+微信 Hook 属逆向注入，**请用小号** + 低频；正式对外客服建议走微信客服官方 API。
 
 ## 三个核心概念
 
